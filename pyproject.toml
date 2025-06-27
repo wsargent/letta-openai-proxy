@@ -1,0 +1,15 @@
+[project]
+name = "letta-openai-proxy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "hayhooks>=0.9.1",
+    "letta-client>=0.1.178",
+    "click>=8.0.0",
+    "requests>=2.25.0",
+    "click-repl>=0.3.0",
+    "prompt-toolkit>=3.0.36",
+    "rich>=13.0.0",
+]
