@@ -25,9 +25,11 @@ class OpenAIClient:
         self.base_url = base_url.rstrip('/')
         self.api_key = api_key
         self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}" if api_key else ""
+            "Content-Type": "application/json"
         }
+        # Only add Authorization header if api_key is provided and non-empty
+        if api_key and api_key.strip():
+            self.headers["Authorization"] = f"Bearer {api_key}"
 
     def list_models(self) -> Dict[str, Any]:
         try:
@@ -105,15 +107,15 @@ class DynamicCompleter(Completer):
         # Base slash commands
         self.base_commands = [
             '/help', '/quit', '/exit', '/q', '/models', '/model', '/clear', 
-            '/history', '/temperature', '/max-tokens', '/stream', '/settings'
+            '/history', '/temperature', '/max-tokens', '/stream', '/settings', '/refresh', '/url'
         ]
     
-    def _get_models(self):
+    def _get_models(self, force_refresh: bool = False):
         """Get models with caching (cache for 30 seconds)"""
         import time
         current_time = time.time()
         
-        if current_time - self._models_cache_timestamp > 30:  # 30 second cache
+        if force_refresh or current_time - self._models_cache_timestamp > 30:  # 30 second cache
             models_data = self.client.list_models()
             if models_data and "data" in models_data:
                 # Store only combined "name (id)" format
@@ -564,7 +566,28 @@ class REPLContext:
         tokens = self.settings['max_tokens']
         click.echo(f"  Max tokens: {tokens if tokens else 'unlimited'}")
         click.echo(f"  Streaming: {'enabled' if self.settings['stream'] else 'disabled'}")
+        click.echo(f"  Base URL: {self.client.base_url}")
+        click.echo(f"  API Key: {'***' if self.client.api_key else 'None'}")
         click.echo(f"  Settings file: {self.settings_manager.settings_file}")
+    
+    def reload_client_from_env(self):
+        """Reload the client with fresh environment variables"""
+        env_base_url = os.getenv('LETTA_BASE_URL')
+        if env_base_url and not env_base_url.endswith('/v1'):
+            env_base_url = env_base_url.rstrip('/') + '/v1'
+        
+        env_api_key = os.getenv('LETTA_API_TOKEN', '')
+        
+        # Use environment variables if available, otherwise keep current values
+        new_base_url = env_base_url or self.client.base_url
+        new_api_key = env_api_key if env_api_key != '' else self.client.api_key
+        
+        # Create new client
+        self.client = OpenAIClient(new_base_url, new_api_key)
+        
+        click.echo(f"Reloaded client configuration:")
+        click.echo(f"  Base URL: {self.client.base_url}")
+        click.echo(f"  API Key: {'***' if self.client.api_key else 'None'}")
     
     def resolve_model_name(self, model_name_or_id: str) -> str:
         """Resolve model name to ID, return the ID if it's already an ID or name if not found"""
@@ -599,8 +622,15 @@ def cli(ctx, base_url, api_key):
     settings_manager = SettingsManager()
     saved_settings = settings_manager.load_settings()
     
-    final_base_url = base_url or saved_settings.get('base_url', 'http://localhost:1416/v1')
-    final_api_key = api_key or saved_settings.get('api_key', '')
+    # Check environment variables, then saved settings, then defaults
+    env_base_url = os.getenv('LETTA_BASE_URL')
+    if env_base_url and not env_base_url.endswith('/v1'):
+        env_base_url = env_base_url.rstrip('/') + '/v1'
+    
+    env_api_key = os.getenv('LETTA_API_TOKEN', '')
+    
+    final_base_url = base_url or env_base_url or saved_settings.get('base_url', 'http://localhost:1416/v1')
+    final_api_key = api_key or env_api_key or saved_settings.get('api_key', '')
     
     ctx.obj['client'] = OpenAIClient(final_base_url, final_api_key)
     
@@ -697,6 +727,9 @@ def start_repl(client: OpenAIClient):
                 elif command == 'help':
                     show_help()
                 elif command == 'models':
+                    # Force refresh models when explicitly requested
+                    completer._models_cache = []
+                    completer._models_cache_timestamp = 0
                     models_data = client.list_models()
                     if models_data and "data" in models_data:
                         click.echo("Available models:")
@@ -751,6 +784,26 @@ def start_repl(client: OpenAIClient):
                         click.echo(f"Streaming: {'enabled' if stream else 'disabled'}")
                 elif command == 'settings':
                     ctx.show_settings()
+                elif command == 'refresh':
+                    # Force refresh models cache and other cached data
+                    completer._models_cache = []
+                    completer._models_cache_timestamp = 0
+                    click.echo("Refreshed models cache. Use /models to see updated list.")
+                elif command == 'url':
+                    if args:
+                        # Set a new URL directly
+                        new_url = args.strip()
+                        if not new_url.endswith('/v1'):
+                            new_url = new_url.rstrip('/') + '/v1'
+                        ctx.client = OpenAIClient(new_url, ctx.client.api_key)
+                        completer._models_cache = []
+                        completer._models_cache_timestamp = 0
+                        click.echo(f"Updated Base URL to: {new_url}")
+                    else:
+                        # Reload from environment variables
+                        ctx.reload_client_from_env()
+                        completer._models_cache = []
+                        completer._models_cache_timestamp = 0
                 else:
                     click.echo(f"Unknown command: {command}. Type /help for available commands.", err=True)
             else:
@@ -785,6 +838,9 @@ Available commands:
   /stream <true/false>  - Enable/disable streaming responses
   /stream               - Show current streaming setting
   /settings             - Show all current settings and config file location
+  /refresh              - Refresh models cache (useful after changing LETTA_BASE_URL)
+  /url                  - Reload client from environment variables (LETTA_BASE_URL)
+  /url <new-url>        - Set a new base URL directly
 
 Just type your message to chat with the selected model.
 Settings are automatically saved when changed.

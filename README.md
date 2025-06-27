@@ -12,10 +12,11 @@ uv venv
 source .venv/bin/activate
 ```
 
-Copy the`env_example` to `.env` and set up your credentials:
+You will need a letta server to run.  The easiest way to do this is to go to https://github.com/wsargent/groundedllm -- set up the tokens and run `docker compose up` to bring up the system.
+
+Copy the `env_example` to `.env` and set up your credentials:
 
 ```
-
 LETTA_BASE_URL=http://your-letta-server
 
 LETTA_API_TOKEN=your-letta-password-if-any
@@ -42,6 +43,8 @@ For your convenience, a simple command line client is included that you can run 
 ```
 uv run python cli_client.py
 ```
+
+And then type `/models` to list the available models.
 
 ## Limitations
 
