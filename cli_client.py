@@ -212,8 +212,29 @@ class REPLContext:
         
         # Show loaded model if any
         if self.model:
-            click.echo(f"Loaded saved model: {self.model}")
+            self._display_loaded_model()
     
+    def _display_loaded_model(self):
+        """Display the loaded model with friendly name if available"""
+        try:
+            # Get the friendly display name for the loaded model
+            models_data = self.client.list_models()
+            if models_data and "data" in models_data:
+                for m in models_data["data"]:
+                    if m.get('id') == self.model:
+                        model_name = m.get('name', '')
+                        if model_name:
+                            click.echo(f"Loaded saved model: {model_name} ({self.model})")
+                        else:
+                            click.echo(f"Loaded saved model: {self.model}")
+                        return
+                # Model not found in current list
+                click.echo(f"Loaded saved model: {self.model} (not currently available)")
+            else:
+                click.echo(f"Loaded saved model: {self.model}")
+        except Exception:
+            click.echo(f"Loaded saved model: {self.model}")
+
     def save_current_settings(self):
         """Save current settings to file"""
         settings_to_save = {
@@ -253,10 +274,13 @@ class REPLContext:
             timestamp_prefix_len = len(prefix + timestamp + " ")
             content_indent = indent + " " * timestamp_prefix_len
             
+            # Use much more of the terminal width for thinking content
+            available_width = max(80, terminal_width - len(indent) - 8)  # Just leave small margin
+            
             if content:
                 wrapped_content = textwrap.fill(
                     content,
-                    width=terminal_width - len(content_indent),
+                    width=available_width,
                     subsequent_indent=""
                 ).split('\n')
                 
@@ -277,9 +301,12 @@ class REPLContext:
         else:
             # No timestamp, treat as regular thinking content
             indent = "    "
+            # Use much more of the terminal width for thinking content
+            available_width = max(80, terminal_width - len(indent) - 8)  # Just leave small margin
+            
             wrapped_lines = textwrap.fill(
                 text.strip(), 
-                width=terminal_width - len(indent),
+                width=available_width,
                 subsequent_indent=""
             ).split('\n')
             
@@ -424,7 +451,7 @@ class REPLContext:
             # Get terminal width for proper wrapping
             try:
                 terminal_width = click.get_terminal_size().columns
-            except:
+            except (OSError, AttributeError):
                 terminal_width = 80  # fallback
             
             try:
