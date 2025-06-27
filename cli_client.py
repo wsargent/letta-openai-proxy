@@ -6,6 +6,8 @@ import json
 import sys
 import re
 import textwrap
+import os
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 from rich.console import Console
@@ -103,7 +105,7 @@ class DynamicCompleter(Completer):
         # Base slash commands
         self.base_commands = [
             '/help', '/quit', '/exit', '/q', '/models', '/model', '/clear', 
-            '/history', '/temperature', '/max-tokens', '/stream'
+            '/history', '/temperature', '/max-tokens', '/stream', '/settings'
         ]
     
     def _get_models(self):
@@ -153,18 +155,76 @@ class DynamicCompleter(Completer):
                         yield Completion(model, start_position=-len(partial_model))
 
 
+class SettingsManager:
+    def __init__(self):
+        self.config_dir = Path.home() / ".letta-cli"
+        self.settings_file = self.config_dir / "settings.json"
+        self.config_dir.mkdir(exist_ok=True)
+    
+    def load_settings(self) -> Dict[str, Any]:
+        """Load settings from file, return defaults if file doesn't exist"""
+        default_settings = {
+            "model": None,
+            "temperature": 0.7,
+            "max_tokens": None,
+            "stream": True,
+            "base_url": "http://localhost:1416/v1",
+            "api_key": ""
+        }
+        
+        if self.settings_file.exists():
+            try:
+                with open(self.settings_file, 'r') as f:
+                    saved_settings = json.load(f)
+                    # Merge with defaults to handle new settings
+                    default_settings.update(saved_settings)
+            except (json.JSONDecodeError, IOError) as e:
+                click.echo(f"Warning: Could not load settings: {e}", err=True)
+        
+        return default_settings
+    
+    def save_settings(self, settings: Dict[str, Any]) -> None:
+        """Save settings to file"""
+        try:
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except IOError as e:
+            click.echo(f"Warning: Could not save settings: {e}", err=True)
+
+
 class REPLContext:
     def __init__(self, client: OpenAIClient, model: Optional[str] = None):
         self.client = client
-        self.model = model
         self.conversation = []
+        self.settings_manager = SettingsManager()
+        
+        # Load saved settings
+        saved_settings = self.settings_manager.load_settings()
+        self.model = model or saved_settings.get("model")
         self.settings = {
-            "temperature": 0.7,
-            "max_tokens": None,
-            "stream": True
+            "temperature": saved_settings.get("temperature", 0.7),
+            "max_tokens": saved_settings.get("max_tokens"),
+            "stream": saved_settings.get("stream", True)
         }
+        
         # Initialize rich console for markdown rendering
         self.console = Console(force_terminal=True, legacy_windows=False)
+        
+        # Show loaded model if any
+        if self.model:
+            click.echo(f"Loaded saved model: {self.model}")
+    
+    def save_current_settings(self):
+        """Save current settings to file"""
+        settings_to_save = {
+            "model": self.model,
+            "temperature": self.settings["temperature"],
+            "max_tokens": self.settings["max_tokens"],
+            "stream": self.settings["stream"],
+            "base_url": "http://localhost:1416/v1",  # Could be made configurable
+            "api_key": ""  # Could be made configurable
+        }
+        self.settings_manager.save_settings(settings_to_save)
     
     def format_timestamp(self) -> str:
         """Get current time in HH:MM:SS format with bold formatting"""
@@ -232,47 +292,47 @@ class REPLContext:
     
     def format_markdown(self, content: str) -> str:
         """Convert markdown content to ANSI formatted text with clickable links"""
-        try:
-            # Create a rich Markdown object
-            md = Markdown(content)
-            
-            # Render to string with ANSI codes
-            with self.console.capture() as capture:
-                self.console.print(md)
-            
-            return capture.get()
-        except Exception:
-            # Fallback to basic formatting if rich fails
-            return self.basic_markdown_format(content)
+        # Always use basic formatting to ensure URLs are expanded
+        return self.basic_markdown_format(content)
     
     def basic_markdown_format(self, content: str) -> str:
-        """Fallback markdown formatting using regex"""
-        # Bold: **text** or __text__
-        content = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', content)
-        content = re.sub(r'__(.*?)__', r'\033[1m\1\033[0m', content)
+        """Enhanced markdown formatting using regex with URL expansion"""
+        # Process line by line to handle bullet points and other formatting
+        lines = content.split('\n')
+        formatted_lines = []
         
-        # Italic: *text* or _text_
-        content = re.sub(r'\*(.*?)\*', r'\033[3m\1\033[0m', content)
-        content = re.sub(r'_(.*?)_', r'\033[3m\1\033[0m', content)
+        for line in lines:
+            # Handle bullet points (•, -, *, +)
+            line = re.sub(r'^(\s*)[•\-\*\+]\s+', r'\1• ', line)
+            
+            # Bold: **text** or __text__
+            line = re.sub(r'\*\*(.*?)\*\*', r'\033[1m\1\033[0m', line)
+            line = re.sub(r'__(.*?)__', r'\033[1m\1\033[0m', line)
+            
+            # Italic: *text* or _text_ (but not if it's a bullet point)
+            line = re.sub(r'(?<![\s•])\*(.*?)\*(?!\s)', r'\033[3m\1\033[0m', line)
+            line = re.sub(r'(?<![\s•])_(.*?)_(?!\s)', r'\033[3m\1\033[0m', line)
+            
+            # Headers: # Header
+            line = re.sub(r'^#{1}\s+(.*?)$', r'\033[1;36m\1\033[0m', line)
+            line = re.sub(r'^#{2}\s+(.*?)$', r'\033[1;35m\1\033[0m', line)
+            line = re.sub(r'^#{3}\s+(.*?)$', r'\033[1;34m\1\033[0m', line)
+            
+            # Code blocks: `code`
+            line = re.sub(r'`([^`]+)`', r'\033[37;100m\1\033[0m', line)
+            
+            # Links: [text](url) - expand to show both text and URL for easy clicking
+            def expand_link(match):
+                text = match.group(1)
+                url = match.group(2)
+                # Always show both text and URL for maximum clickability
+                return f'{text} - \033[4;34m{url}\033[0m'
+            
+            line = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', expand_link, line)
+            
+            formatted_lines.append(line)
         
-        # Headers: # Header
-        content = re.sub(r'^#{1}\s+(.*?)$', r'\033[1;36m\1\033[0m', content, flags=re.MULTILINE)
-        content = re.sub(r'^#{2}\s+(.*?)$', r'\033[1;35m\1\033[0m', content, flags=re.MULTILINE)
-        content = re.sub(r'^#{3}\s+(.*?)$', r'\033[1;34m\1\033[0m', content, flags=re.MULTILINE)
-        
-        # Code blocks: `code`
-        content = re.sub(r'`([^`]+)`', r'\033[37;100m\1\033[0m', content)
-        
-        # Links: [text](url) - make clickable
-        def make_clickable_link(match):
-            text = match.group(1)
-            url = match.group(2)
-            # OSC 8 hyperlink escape sequence
-            return f'\033]8;;{url}\033\\{text}\033]8;;\033\\'
-        
-        content = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', make_clickable_link, content)
-        
-        return content
+        return '\n'.join(formatted_lines)
 
     def format_response(self, content: str) -> str:
         """Format response content with proper think block formatting and markdown"""
@@ -298,7 +358,7 @@ class REPLContext:
         parts = re.split(r'(\n    \033\[2;3m.*?\033\[0m\n)', formatted)
         result_parts = []
         
-        for i, part in enumerate(parts):
+        for part in parts:
             if '\033[2;3m' in part:  # This is a think block part
                 result_parts.append(part)
             else:
@@ -323,9 +383,13 @@ class REPLContext:
                         click.echo(f"Model set to: {model_name} ({resolved_model})")
                     else:
                         click.echo(f"Model set to: {resolved_model}")
+                    # Save settings when model is changed
+                    self.save_current_settings()
                     return
         
         click.echo(f"Model set to: {resolved_model}")
+        # Save settings even if model not found in list
+        self.save_current_settings()
 
     def send_message(self, message: str):
         if not self.model:
@@ -396,8 +460,7 @@ class REPLContext:
                             else:
                                 # Display regular content with markdown formatting
                                 formatted_line = self.format_markdown(line)
-                                click.echo(formatted_line, nl=False)
-                                print()  # Add newline after markdown formatting
+                                click.echo(formatted_line)
                 
                 # Handle any remaining content in buffer
                 if line_buffer.strip():
@@ -406,7 +469,7 @@ class REPLContext:
                         click.echo(formatted)
                     else:
                         formatted_buffer = self.format_markdown(line_buffer)
-                        click.echo(formatted_buffer, nl=False)
+                        click.echo(formatted_buffer)
                 elif not line_buffer and not assistant_message.endswith('\n'):
                     click.echo()  # Add final newline only if needed
                 
@@ -449,6 +512,7 @@ class REPLContext:
         if 0 <= temp <= 2:
             self.settings["temperature"] = temp
             click.echo(f"Temperature set to: {temp}")
+            self.save_current_settings()
         else:
             click.echo("Temperature must be between 0 and 2", err=True)
 
@@ -458,10 +522,22 @@ class REPLContext:
             click.echo(f"Max tokens set to: {tokens}")
         else:
             click.echo("Max tokens limit removed")
+        self.save_current_settings()
 
     def set_streaming(self, stream: bool):
         self.settings["stream"] = stream
         click.echo(f"Streaming {'enabled' if stream else 'disabled'}")
+        self.save_current_settings()
+    
+    def show_settings(self):
+        """Display current settings"""
+        click.echo("Current settings:")
+        click.echo(f"  Model: {self.model if self.model else 'None'}")
+        click.echo(f"  Temperature: {self.settings['temperature']}")
+        tokens = self.settings['max_tokens']
+        click.echo(f"  Max tokens: {tokens if tokens else 'unlimited'}")
+        click.echo(f"  Streaming: {'enabled' if self.settings['stream'] else 'disabled'}")
+        click.echo(f"  Settings file: {self.settings_manager.settings_file}")
     
     def resolve_model_name(self, model_name_or_id: str) -> str:
         """Resolve model name to ID, return the ID if it's already an ID or name if not found"""
@@ -485,13 +561,21 @@ class REPLContext:
 
 
 @click.group(invoke_without_command=True)
-@click.option('--base-url', default='http://localhost:1416/v1', help='API base URL')
-@click.option('--api-key', default='', help='API key for authentication')
+@click.option('--base-url', default=None, help='API base URL (overrides saved setting)')
+@click.option('--api-key', default=None, help='API key for authentication (overrides saved setting)')
 @click.pass_context
 def cli(ctx, base_url, api_key):
     """OpenAI CLI Client for Letta - Interactive REPL"""
     ctx.ensure_object(dict)
-    ctx.obj['client'] = OpenAIClient(base_url, api_key)
+    
+    # Load saved settings for base_url and api_key if not provided
+    settings_manager = SettingsManager()
+    saved_settings = settings_manager.load_settings()
+    
+    final_base_url = base_url or saved_settings.get('base_url', 'http://localhost:1416/v1')
+    final_api_key = api_key or saved_settings.get('api_key', '')
+    
+    ctx.obj['client'] = OpenAIClient(final_base_url, final_api_key)
     
     if ctx.invoked_subcommand is None:
         start_repl(ctx.obj['client'])
@@ -638,6 +722,8 @@ def start_repl(client: OpenAIClient):
                     else:
                         stream = ctx.settings['stream']
                         click.echo(f"Streaming: {'enabled' if stream else 'disabled'}")
+                elif command == 'settings':
+                    ctx.show_settings()
                 else:
                     click.echo(f"Unknown command: {command}. Type /help for available commands.", err=True)
             else:
@@ -671,8 +757,10 @@ Available commands:
   /max-tokens           - Show current max tokens
   /stream <true/false>  - Enable/disable streaming responses
   /stream               - Show current streaming setting
+  /settings             - Show all current settings and config file location
 
 Just type your message to chat with the selected model.
+Settings are automatically saved when changed.
 """
     click.echo(help_text)
 
