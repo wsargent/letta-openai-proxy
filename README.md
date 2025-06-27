@@ -1,10 +1,10 @@
 # Letta OpenAI Proxy
 
-This project turns Letta into an OpenAI-compatible API.  Agents are listed as models, and sending messages through the chat completion API will send messages to the selected Letta agent and receive reasoning messages.
+This project makes [Letta](https://docs.letta.com) agents available through an OpenAI-compatible API.  Agents are listed as models, and sending messages through the chat completion API will send messages to the selected Letta agent and receive reasoning messages.
 
 ## Set up
 
-This project uses `uv` to run the application.
+This project uses `uv` to run the application.  The usual uv methods apply:
 
 ```
 uv sync
@@ -35,7 +35,9 @@ Please see the Hayhooks documentation for logging and configuration options.
 
 ## Using the Client
 
-You can talk to the agent using an OpenAI client:
+You can use any OpenAI API compatible client to chat with the agent.  I prefer [Open WebUI](https://docs.openwebui.com) but there are many options.
+
+For your convenience, a simple command line client is included that you can run standalone:
 
 ```
 uv run python cli_client.py
@@ -43,4 +45,4 @@ uv run python cli_client.py
 
 ## Limitations
 
-You cannot use tools or upload data sources currently.
+You cannot use tools or upload data sources with an agent currently.
