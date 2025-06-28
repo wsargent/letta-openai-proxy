@@ -46,6 +46,8 @@ uv run python cli_client.py
 
 And then type `/models` to list the available models.
 
+Unfortunately, Apple's Terminal app doesn't support clickable hyperlinks: I recommend you use [iTerm2](https://iterm2.com) or another terminal that supports [OSC8](https://github.com/Alhadis/OSC8-Adoption) as it makes clicking on links much easier.  
+
 ## Limitations
 
 You cannot use tools or upload data sources with an agent currently.
